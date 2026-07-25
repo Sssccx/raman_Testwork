@@ -10,6 +10,7 @@ import tensorflow as tf
 from tensorflow.keras import layers, models, callbacks
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import precision_score, f1_score, matthews_corrcoef
 
 # 全局配置
 BASE_DIR = "D:/python_homework/Raman_spectral_signature_analysis/Raman_Data"  # 解压后所有文件夹所在的根目录
@@ -175,9 +176,20 @@ def build_cnn(input_length):
         layers.Dense(1, activation='sigmoid')
     ])
     optimizer = tf.keras.optimizers.AdamW(learning_rate=1e-4, weight_decay=1e-4)
-    model.compile(optimizer=optimizer,
-                  loss='binary_crossentropy',
-                  metrics=['accuracy', tf.keras.metrics.AUC(name='auc')])
+    model.compile(
+        optimizer=optimizer,
+        loss='binary_crossentropy',
+        metrics=[
+            'accuracy',
+            tf.keras.metrics.AUC(name='auc'),
+            tf.keras.metrics.Precision(name='precision'),
+            tf.keras.metrics.Recall(name='recall'),
+            tf.keras.metrics.TruePositives(name='tp'),
+            tf.keras.metrics.FalsePositives(name='fp'),
+            tf.keras.metrics.TrueNegatives(name='tn'),
+            tf.keras.metrics.FalseNegatives(name='fn')
+        ]
+    )
     return model
 
 # 交叉验证训练与评估
@@ -255,6 +267,9 @@ def run_cross_validation(X, y, patient_ids, n_splits=5, val_patient_ratio=VAL_PA
         tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
         spec_sens = tp / (tp + fn) if (tp + fn) > 0 else 0.0
         spec_spec = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+        spec_precision = precision_score(y_test, y_pred)
+        spec_f1 = f1_score(y_test, y_pred)
+        spec_mcc = matthews_corrcoef(y_test, y_pred)
 
         # 患者级评估，计算平均概率
         test_df = pd.DataFrame({"patient_id": test_pids, "true": y_test, "prob": y_prob})
@@ -268,15 +283,19 @@ def run_cross_validation(X, y, patient_ids, n_splits=5, val_patient_ratio=VAL_PA
         tn, fp, fn, tp = confusion_matrix(patient_grouped["true_label"], patient_pred_label).ravel()
         patient_sens = tp / (tp + fn) if (tp + fn) > 0 else 0.0
         patient_spec = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+        pat_precision = precision_score(patient_grouped["true_label"], patient_pred_label)
+        pat_f1 = f1_score(patient_grouped["true_label"], patient_pred_label)
+        pat_mcc = matthews_corrcoef(patient_grouped["true_label"], patient_pred_label)
 
-        print(f"光谱级 -> Acc: {spec_acc:.4f}, AUC: {spec_auc:.4f}, Sens: {spec_sens:.4f}, Spec: {spec_spec:.4f}")
         print(
-            f"患者级 -> Acc: {patient_acc:.4f}, AUC: {patient_auc:.4f}, Sens: {patient_sens:.4f}, Spec: {patient_spec:.4f}")
+            f"光谱级 -> Acc:{spec_acc:.4f} AUC:{spec_auc:.4f} Sens:{spec_sens:.4f} Spec:{spec_spec:.4f} Prec:{spec_precision:.4f} F1:{spec_f1:.4f} MCC:{spec_mcc:.4f}")
+        print(
+            f"患者级 -> Acc:{patient_acc:.4f} AUC:{patient_auc:.4f} Sens:{patient_sens:.4f} Spec:{patient_spec:.4f} Prec:{pat_precision:.4f} F1:{pat_f1:.4f} MCC:{pat_mcc:.4f}")
 
         fold_results.append({
             "fold": fold,
-            "spectral": (spec_acc, spec_auc, spec_sens, spec_spec),
-            "patient": (patient_acc, patient_auc, patient_sens, patient_spec),
+            "spectral": (spec_acc, spec_auc, spec_sens, spec_spec,spec_precision, spec_f1, spec_mcc),
+            "patient": (patient_acc, patient_auc, patient_sens, patient_spec, pat_precision, pat_f1, pat_mcc),
             "history": history.history
         })
         fold += 1
@@ -284,7 +303,7 @@ def run_cross_validation(X, y, patient_ids, n_splits=5, val_patient_ratio=VAL_PA
     return fold_results
 
 
-# ===================== 7. 主程序 =====================
+# 主程序
 if __name__ == "__main__":
     print("加载临床信息...")
     clinical_dict = load_clinical_info(EXCEL_PATH)
@@ -300,8 +319,7 @@ if __name__ == "__main__":
     print("\n" + "=" * 100)
     print("           交叉验证结果汇总（使用最佳阈值）")
     print("=" * 100)
-    metrics = ["Accuracy", "AUC", "Sensitivity", "Specificity"]
-    print(f"{'':<12}{'光谱级':>40}{'患者级':>40}")
+    metrics = ["Accuracy", "AUC", "Sensitivity", "Specificity", "Precision", "F1", "MCC"]
     print(f"{'Metric':<12}" + "".join([f"{m:>10}" for m in metrics * 2]))
     spec_means, patient_means = [], []
     for r in results:
@@ -314,7 +332,6 @@ if __name__ == "__main__":
     spec_std = np.std(spec_means, axis=0)
     pat_avg = np.mean(patient_means, axis=0)
     pat_std = np.std(patient_means, axis=0)
-    print("-" * 92)
     print(f"{'Mean':<12}" + "".join([f"{v:>10.4f}" for v in np.concatenate([spec_avg, pat_avg])]))
     print(f"{'Std':<12}" + "".join([f"{v:>10.4f}" for v in np.concatenate([spec_std, pat_std])]))
 
